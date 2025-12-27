@@ -13,11 +13,11 @@ YELLOW = '\033[93m'
 BLUE = '\033[94m'
 RESET = '\033[0m'
 
-tickers = ['BLOK', 'QQQM', 'GLXY', 'CRCL', 'COIN']
+tickers = ['BLOK', 'QQQM', 'GLXY', 'CRCL', 'COIN', 'ETH-USD']
 
 # 매수 기준 (RSI)
 buy_thresholds = {
-    'QQQM': 40, 'BLOK': 35, 'GLXY': 30, 'CRCL': 30, 'COIN': 30
+    'QQQM': 40, 'BLOK': 35, 'GLXY': 30, 'CRCL': 30, 'COIN': 30, 'ETH-USD': 30
 }
 
 def get_signal(ticker, rsi):
