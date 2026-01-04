@@ -13,11 +13,11 @@ YELLOW = '\033[93m'
 BLUE = '\033[94m'
 RESET = '\033[0m'
 
-tickers = ['BLOK', 'QQQM', 'GLXY', 'CRCL', 'COIN', 'ETH-USD']
+tickers = ['BLOK', 'QQQM', 'GLXY', 'CRCL', 'COIN', 'ETH-USD', 'BTC-USD']
 
 # 매수 기준 (RSI)
 buy_thresholds = {
-    'QQQM': 40, 'BLOK': 35, 'GLXY': 30, 'CRCL': 30, 'COIN': 30, 'ETH-USD': 30
+    'QQQM': 40, 'BLOK': 35, 'GLXY': 30, 'CRCL': 30, 'COIN': 30, 'ETH-USD': 30, 'BTC-USD': 30
 }
 
 def get_signal(ticker, rsi):
@@ -86,4 +86,3 @@ for ticker in tickers:
         print(f"{ticker:<10} | Error: {e}")
 
 print("-" * 80)
-print("■ Strategy: Low RSI + Near Support(Low Price) = Best Entry")
