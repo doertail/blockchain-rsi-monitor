@@ -7,9 +7,12 @@ import sys
 from io import StringIO
 from dotenv import load_dotenv
 from google import genai
+from pathlib import Path
 
 # 환경 변수 로드
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / '.env')
+# load_dotenv()
 
 # 경고 차단
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -21,11 +24,11 @@ YELLOW = '\033[93m'
 BLUE = '\033[94m'
 RESET = '\033[0m'
 
-tickers = ['BLOK', 'QQQM', 'GLXY', 'CRCL', 'COIN', 'ETH-USD', 'BTC-USD']
+tickers = ['BLOK', 'QQQM','TSLA', 'CRCL', 'COIN', 'ETH-USD', 'BTC-USD']
 
-# 매수 기준 (RSI)
+# 매수 기준 (RSI
 buy_thresholds = {
-    'QQQM': 40, 'BLOK': 35, 'GLXY': 30, 'CRCL': 30, 'COIN': 30, 'ETH-USD': 30, 'BTC-USD': 30
+    'QQQM': 40, 'BLOK': 35,'TSLA': 35, 'CRCL': 30, 'COIN': 30, 'ETH-USD': 30, 'BTC-USD': 30
 }
 
 def get_signal(ticker, rsi):
@@ -99,26 +102,27 @@ def send_to_discord(content):
         print(f"\n{RED}❌ 디스코드 전송 실패: {e}{RESET}")
 
 def scan_market():
-    """시장 스캔을 수행하고 결과를 반환"""
+    """시장 스캔을 수행하고 결과를 반환 (MA120 추가 버전)"""
     # 출력 캡처 시작
     old_stdout = sys.stdout
     sys.stdout = captured_output = StringIO()
 
     print(f"\nExecution Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("-" * 80)
-    print(f"{'Ticker':<10} | {'Price':<10} | {'RSI':<15} | {'Support(3M)':<20} | {'Signal'}")
-    print("-" * 80)
+    print("-" * 105) # 표 너비 조정
+    # 헤더에 Trend(MA120) 추가
+    print(f"{'Ticker':<10} | {'Price':<10} | {'RSI':<15} | {'Trend (MA120)':<20} | {'Support(3M)':<20} | {'Signal'}")
+    print("-" * 105)
 
-    # 데이터 저장용 (Gemini에 보낼 구조화된 데이터)
     market_data = []
 
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
-            df = stock.history(period="3mo")
+            # 중요: 120일 이동평균을 계산하려면 최소 6개월 이상의 데이터가 필요함 -> 1y로 변경
+            df = stock.history(period="1y")
 
-            if df.empty:
-                print(f"{ticker:<10} | {'N/A':<10} | Data Not Found")
+            if df.empty or len(df) < 120:
+                print(f"{ticker:<10} | {'N/A':<10} | Data Not Sufficient (Need >120 days)")
                 continue
 
             # RSI 계산
@@ -130,34 +134,49 @@ def scan_market():
             rs = ema_up / ema_down
             df['RSI'] = 100 - (100 / (1 + rs))
 
+            # MA120 (120일 이동평균선) 계산
+            df['MA120'] = df['Close'].rolling(window=120).mean()
+
             current_price = float(df['Close'].iloc[-1])
             current_rsi = float(df['RSI'].iloc[-1])
-            lowest_price = float(df['Close'].min())
+            current_ma120 = float(df['MA120'].iloc[-1])
+            lowest_price = float(df['Close'][-90:].min()) # 최근 3개월 저점 (슬라이싱으로 조정)
 
             # 신호 및 상태
             signal = get_signal(ticker, current_rsi)
             support_msg = get_support_status(current_price, lowest_price)
 
-            # RSI 색상과 숫자 포맷팅 분리
+            # RSI 색상
             rsi_color = get_rsi_color(ticker, current_rsi)
             rsi_display = f"{rsi_color}{current_rsi:<15.2f}{RESET}"
 
-            print(f"{ticker:<10} | {current_price:<10.2f} | {rsi_display} | {support_msg:<20} | {signal}")
+            # MA120 상태 판별 (Trend)
+            if current_price >= current_ma120:
+                trend_msg = f"{GREEN}Bullish (Above){RESET}"
+                ma_gap = f"(+{((current_price - current_ma120)/current_ma120)*100:.1f}%)"
+            else:
+                trend_msg = f"{RED}Bearish (Below){RESET}"
+                ma_gap = f"({((current_price - current_ma120)/current_ma120)*100:.1f}%)"
+            
+            trend_display = f"{trend_msg} {ma_gap}"
 
-            # 구조화된 데이터 저장
+            print(f"{ticker:<10} | {current_price:<10.2f} | {rsi_display} | {trend_display:<30} | {support_msg:<20} | {signal}")
+
+            # 구조화된 데이터 저장 (Gemini 전송용)
             market_data.append({
                 'ticker': ticker,
                 'price': current_price,
                 'rsi': current_rsi,
-                'lowest_3m': lowest_price,
-                'distance_from_low': ((current_price - lowest_price) / lowest_price) * 100,
+                'ma120': current_ma120,
+                'trend': 'Bullish' if current_price >= current_ma120 else 'Bearish',
+                'trend_gap': ((current_price - current_ma120)/current_ma120)*100,
                 'signal': signal.replace(GREEN, '').replace(YELLOW, '').replace(RED, '').replace(BLUE, '').replace(RESET, '').strip()
             })
 
         except Exception as e:
             print(f"{ticker:<10} | Error: {e}")
 
-    print("-" * 80)
+    print("-" * 105)
 
     # 출력 캡처 종료
     sys.stdout = old_stdout
@@ -166,88 +185,83 @@ def scan_market():
     return output, market_data
 
 def analyze_with_gemini(scan_output, market_data):
-    """Gemini API를 사용하여 시장 분석 (Failover: 2.0 -> 1.5)"""
+    """Gemini API를 사용하여 시장 분석 (Trend Filter 적용 버전)"""
     api_key = os.getenv('GEMINI_API_KEY')
 
     if not api_key:
-        print("\n⚠️  GEMINI_API_KEY가 .env 파일에 설정되지 않았습니다.")
-        print("📝 .env 파일에 다음과 같이 추가하세요:")
-        print("   GEMINI_API_KEY=your_api_key_here")
+        print("\n⚠️ GEMINI_API_KEY가 .env 파일에 설정되지 않았습니다.")
         return
 
     try:
         # Gemini API 클라이언트 생성
         client = genai.Client(api_key=api_key)
 
-        # 전략 컨텍스트 정의
+        # 전략 컨텍스트 정의 (업데이트됨)
         strategy_context = """
         [사용자 페르소나]
-        - CS 전공 창업가, 효율과 논리 중시.
-        - 감정에 휘둘리는 투자를 경멸함. '감'이 아닌 '데이터'로만 움직임.
-        - 목표: 시장의 소음(Noise)을 차단하고, 확실한 신호(Signal)에만 격발.
+        - CS 전공 창업가. '감'을 혐오하고 '데이터'와 '로직'만 믿음.
+        - 효율 극대화: 불필요한 매매(Latency)를 줄이고, 승률 높은 구간(High Conviction)만 타격.
 
-        [투자 전략: The Sniper]
-        1. 포트폴리오 구조:
-           - 기초 체력(Defense): QQQM (매일 20$ 자동 적립 + 폭락 시 목돈 투입)
-           - 팬심(Satellite): TSLA (매일 10$ 자동 적립)
-           - 스나이핑(Offense): BLOK, GLXY, CRCL, COIN (현금 대기 -> RSI 30 이하 과매도 구간에서만 사냥)
-           - 관망(Crypto Base): BTC, ETH (보유 X)
-        2. 행동 강령:
-           - 어중간한 구간(RSI 40~60)에서는 절대 매수 버튼을 누르지 않는다.
-           - "현금도 종목이다" (Cash is a Position). 지루함을 견디는 것이 핵심 능력.
-           - 상승장에 포모(FOMO)를 느끼지 말고, 하락장에 공포를 느끼지 마라.
+        [투자 전략: The Sniper v2.0 (Trend Filtering)]
+        1. 핵심 로직 (Logic Gate):
+           - 조건 A (Price > MA120): '상승 추세'. RSI 과매도(30)는 강력한 매수 기회(Buy the Dip).
+           - 조건 B (Price < MA120): '하락 추세'. RSI 과매도(30)는 '지하실 입구'일 가능성 높음. 보수적 접근 필수.
+        
+        2. 포트폴리오 상태:
+           - CRCL: 1.3주
+           - TSLA: 1주 + 매일 10$ 적립
+           - BLOK: 3주
+           - QQQM: 2주 + 매일 20$ 적립
+           - COIN: 10$ 보유 (가격 정찰)
+           - TLT: 16주 (안전자산)
+           - 현금: 6300달러
         """
 
-        # 분석 요청 프롬프트
+        # 분석 요청 프롬프트 (데이터 구조 반영)
         prompt = f"""
-        당신은 이 시스템의 '메인 알고리즘(System Core)'이자, 사용자의 '냉철한 투자 참모'입니다.
-        단순한 데이터 나열이 아니라, 사용자의 멘탈을 관리하고 행동을 통제하는 것이 목적입니다.
+        당신은 사용자의 자산을 지키는 '냉철한 리스크 관리 알고리즘'입니다.
+        단순히 RSI가 낮다고 매수를 외치지 말고, **'추세(Trend)'를 먼저 확인하고 판결을 내리십시오.**
 
         [입력 데이터]
         {market_data}
+        (참고: 'trend_gap'은 현재가가 120일 이평선 대비 몇 % 위치에 있는지를 의미함. 마이너스면 하락 추세.)
 
-        [분석 요구사항]
-        1. **말투 및 톤앤매너**:
-           - 증권사 리포트 같은 딱딱한 문체(~함, ~임) 지양.
-           - 사용자와 대화하듯 **냉소적이고 직설적인 구어체와 명령조**를 섞어서 사용 (~해라, ~다, ~하지 마라).
-           - 사용자가 감정적(지루함, 조급함)으로 흔들릴 틈을 주지 않는 단호한 태도 유지.
-           - **CS 전공자/창업가 페르소나 반영**: '디버깅', '컴파일', '최적화', '노이즈', '레이턴시' 같은 용어를 적절히 비유에 활용.
+        [분석 지침 및 출력 형식]
+        
+        **1. Tone & Manner:**
+        - 사용자가 하락장에서 섣불리 매수 버튼을 누르려 할 때, 뼈 때리는 팩트로 제압할 것.
+        - 개발자 용어 사용: 'Exception(예외상황)', 'Deprecation(폐기)', 'Fallback(대비책)', 'Bug(오판)'.
+        - 형식적 인사 생략. 바로 본론 진입.
 
-        2. **형식**: 아래 섹션 구조를 따르되, 내용은 '살아있는 조언'으로 채울 것.
+        **2. Report Structure:**
+
+        **[System Status: Market Trend Check]**
+        - 현재 시장이 'Bullish(상승장)'인지 'Bearish(하락장)'인지, 특히 QQQM(지수)과 개별 종목의 괴리를 한 문장으로 진단.
+
+        **[Debugging & Action Plan]**
+        - 각 종목별로 아래 로직을 적용하여 구체적 행동 지시.
+        
+        * **Case 1: Bullish (Above MA120) + RSI Low** → "시스템 정상. 적극 매수(Aggressive Buy) 승인."
+        * **Case 2: Bearish (Below MA120) + RSI Low** → "경고(Warning). 떨어지는 칼날임. RSI가 30이라도 매수 보류. 반등 시그널(양봉) 대기."
+        * **Case 3: Deep Bearish (Below -10% from MA120)** → "시스템 위험. 지금 들어가면 물림. 관망(Wait)이 최선의 방어."
+        * **Case 4: Ambiguous (RSI 40~60)** → "노이즈 구간. 리소스 낭비하지 말고 대기."
+
+        **[Final Compile]**
+        - 오늘 밤 사용자가 실행해야 할 단 하나의 명령(Command)을 출력.
+        - 예: "QQQM 적립만 수행하고, 코인 관련주는 앱 삭제하고 쳐다보지 마라."
 
         ---
-        **[System Log: Market Status Analysis]**
-        (현재 시장 상태를 한 문장으로 요약. 예: "재미없는 횡보장. 도파민은 없다.", "폭락장은 바겐세일이다.")
-
-        ### **1. 데이터 해독 (Decoding)**
-        - **Defense (QQQM)**: 건전한지, 시스템이 잘 돌고 있는지 체크.
-        - **Offense (Sniper Targets)**: RSI 수치를 근거로 "아직 멀었다" 혹은 "방아쇠에 손 올려라"라고 명확히 지시.
-        - **Crypto Base**: 감정적인 추격 매수 욕구를 차단.
-
-        ### **2. 오늘 밤 작전 명령 (Execution Order)**
-        - 표 대신, **핵심 종목별로 짧고 굵은 지침**을 하달.
-        - **QQQM**: 자동 매수 외 건드리지 마라.
-        - **Sniper Target**: RSI 30 안 왔으면 "기다리는 게 능력이다"라고 일침.
-        - **현금**: "쇼핑하지 말고 총알 아껴라"라고 경고.
-
-        ### **3. 결론 (Final Verdict)**
-        - 지금 당장 사용자가 취해야 할 행동을 한 문장으로 요약. (예: "앱 강제 종료하고 나이테듀 기획서나 써라.")
-        - **System Standby** 또는 **System Offline**으로 마무리.
-        ---
-
         [전략 컨텍스트]
         {strategy_context}
         """
 
         print("\n" + "="*80)
-        print("🤖 Gemini AI 기술적 분석 중...")
+        print("🤖 Gemini AI (Trend Filtered) 기술적 분석 중...")
         print("="*80 + "\n")
 
-        # Failover Logic: 2.0 실패 시 자동으로 1.5로 전환
+        # Failover Logic
         analysis_text = None
-
         try:
-            # 1순위: Gemini 2.0 (성능 좋음)
             response = client.models.generate_content(
                 model='gemini-2.0-flash-exp',
                 contents=prompt
@@ -256,34 +270,26 @@ def analyze_with_gemini(scan_output, market_data):
             print(f"{GREEN}✓ Gemini 2.0 모델 사용{RESET}\n")
 
         except Exception as e:
-            print(f"{YELLOW}⚠️ Gemini 2.0 모델 오류: {e}{RESET}")
-            print(f"{YELLOW}→ Gemini 1.5 모델로 전환 중...{RESET}\n")
-
+            print(f"{YELLOW}⚠️ Gemini 2.0 오류, 1.5로 전환: {e}{RESET}")
             try:
-                # 2순위: Gemini 1.5 (안정적)
                 response = client.models.generate_content(
                     model='gemini-flash-latest',
                     contents=prompt
                 )
                 analysis_text = response.text
                 print(f"{GREEN}✓ Gemini 1.5 모델 사용{RESET}\n")
-
             except Exception as e2:
-                print(f"{RED}❌ 모든 Gemini 모델 실패: {e2}{RESET}")
+                print(f"{RED}❌ 분석 실패: {e2}{RESET}")
                 return
 
-        # 분석 결과가 없으면 종료
-        if not analysis_text:
-            print(f"{RED}❌ AI 분석 결과를 받지 못했습니다.{RESET}")
-            return
+        if not analysis_text: return
 
-        # 터미널에 출력
         print(analysis_text)
         print("\n" + "="*80)
 
-        # 디스코드로 전송
+        # 디스코드 전송
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-        discord_msg = f"## 📡 Market Sniper Report [{now}]\n"
+        discord_msg = f"## 📡 Sniper Report v2.0 (Trend Check) [{now}]\n"
         discord_msg += "```\n"
         discord_msg += scan_output
         discord_msg += "```\n"
@@ -293,8 +299,7 @@ def analyze_with_gemini(scan_output, market_data):
         send_to_discord(discord_msg)
 
     except Exception as e:
-        print(f"\n{RED}❌ 예상치 못한 오류 발생: {e}{RESET}")
-
+        print(f"\n{RED}❌ 오류 발생: {e}{RESET}")
 # 메인 실행
 if __name__ == "__main__":
     # 시장 스캔 실행
