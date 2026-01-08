@@ -196,30 +196,41 @@ def analyze_with_gemini(scan_output, market_data):
         # Gemini API 클라이언트 생성
         client = genai.Client(api_key=api_key)
 
-        # 전략 컨텍스트 정의 (업데이트됨)
-        strategy_context = """
-        [사용자 페르소나]
-        - CS 전공 창업가. '감'을 혐오하고 '데이터'와 '로직'만 믿음.
-        - 효율 극대화: 불필요한 매매(Latency)를 줄이고, 승률 높은 구간(High Conviction)만 타격.
+        # 전략 컨텍스트 정의 (환경 변수에서 포트폴리오 로드)
+        portfolio_crcl = os.getenv('PORTFOLIO_CRCL', '0')
+        portfolio_tsla = os.getenv('PORTFOLIO_TSLA', '0')
+        portfolio_blok = os.getenv('PORTFOLIO_BLOK', '0')
+        portfolio_qqqm = os.getenv('PORTFOLIO_QQQM', '0')
+        portfolio_coin = os.getenv('PORTFOLIO_COIN', '0')
+        portfolio_tlt = os.getenv('PORTFOLIO_TLT', '0')
+        portfolio_cash = os.getenv('PORTFOLIO_CASH', '0')
+        auto_invest_tsla = os.getenv('AUTO_INVEST_TSLA', '10')
+        auto_invest_qqqm = os.getenv('AUTO_INVEST_QQQM', '20')
+        my_persona = os.getenv('MY_PERSONA')
 
+        strategy_context = f"""
+        [사용자 페르소나]
+        {my_persona}
+        
         [투자 전략: The Sniper v2.0 (Trend Filtering)]
         1. 핵심 로직 (Logic Gate):
            - 조건 A (Price > MA120): '상승 추세'. RSI 과매도(30)는 강력한 매수 기회(Buy the Dip).
            - 조건 B (Price < MA120): '하락 추세'. RSI 과매도(30)는 '지하실 입구'일 가능성 높음. 보수적 접근 필수.
-        
+
         2. 포트폴리오 상태:
-           - CRCL: 1.3주
-           - TSLA: 1주 + 매일 10$ 적립
-           - BLOK: 3주
-           - QQQM: 2주 + 매일 20$ 적립
-           - COIN: 10$ 보유 (가격 정찰)
-           - TLT: 16주 (안전자산)
-           - 현금: 6300달러
+           - CRCL: {portfolio_crcl}
+           - TSLA: {portfolio_tsla} + 매일 {auto_invest_tsla}$ 적립
+           - BLOK: {portfolio_blok}
+           - QQQM: {portfolio_qqqm} + 매일 {auto_invest_qqqm}$ 적립
+           - COIN: {portfolio_coin}$ 보유 (가격 정찰)
+           - TLT: {portfolio_tlt} (안전자산)
+           - 현금: {portfolio_cash}달러
         """
 
         # 분석 요청 프롬프트 (데이터 구조 반영)
         prompt = f"""
-        당신은 사용자의 자산을 지키는 '냉철한 리스크 관리 알고리즘'입니다.
+        당신은 세계적인 인지도를 가진 금융 전문가입니다.
+        사용자의 자산을 지키는 '냉철한 리스크 관리 알고리즘'처럼 말해주십시오.
         단순히 RSI가 낮다고 매수를 외치지 말고, **'추세(Trend)'를 먼저 확인하고 판결을 내리십시오.**
 
         [입력 데이터]
@@ -227,10 +238,9 @@ def analyze_with_gemini(scan_output, market_data):
         (참고: 'trend_gap'은 현재가가 120일 이평선 대비 몇 % 위치에 있는지를 의미함. 마이너스면 하락 추세.)
 
         [분석 지침 및 출력 형식]
-        
+
         **1. Tone & Manner:**
         - 사용자가 하락장에서 섣불리 매수 버튼을 누르려 할 때, 뼈 때리는 팩트로 제압할 것.
-        - 개발자 용어 사용: 'Exception(예외상황)', 'Deprecation(폐기)', 'Fallback(대비책)', 'Bug(오판)'.
         - 형식적 인사 생략. 바로 본론 진입.
 
         **2. Report Structure:**
@@ -238,13 +248,24 @@ def analyze_with_gemini(scan_output, market_data):
         **[System Status: Market Trend Check]**
         - 현재 시장이 'Bullish(상승장)'인지 'Bearish(하락장)'인지, 특히 QQQM(지수)과 개별 종목의 괴리를 한 문장으로 진단.
 
+        **[Portfolio P&L Analysis]** ⚠️ 중요
+        - **반드시** 포트폴리오 상태에 명시된 '평균 매수가'와 현재가를 비교하여 손익률(%)을 계산할 것.
+        - 각 보유 종목별로:
+          * 평균 매수가 vs 현재가 비교
+          * 손익률 (%) 명시
+          * 물린 종목(-손실)은 추가 매수 시 물타기 위험 경고
+          * 수익 중인 종목(+수익)은 익절 타이밍 검토
+        - 예시: "TSLA: 평균 444.15$ → 현재 431.41$ (-2.9% 손실). 추가 매수는 물타기 위험."
+
         **[Debugging & Action Plan]**
         - 각 종목별로 아래 로직을 적용하여 구체적 행동 지시.
-        
+        - **손익 상태를 반드시 고려**하여 판단할 것.
+
         * **Case 1: Bullish (Above MA120) + RSI Low** → "시스템 정상. 적극 매수(Aggressive Buy) 승인."
         * **Case 2: Bearish (Below MA120) + RSI Low** → "경고(Warning). 떨어지는 칼날임. RSI가 30이라도 매수 보류. 반등 시그널(양봉) 대기."
         * **Case 3: Deep Bearish (Below -10% from MA120)** → "시스템 위험. 지금 들어가면 물림. 관망(Wait)이 최선의 방어."
         * **Case 4: Ambiguous (RSI 40~60)** → "노이즈 구간. 리소스 낭비하지 말고 대기."
+        * **Case 5: 손실 중(-) + Bearish** → "물타기 금지. 손절 라인 점검 필요."
 
         **[Final Compile]**
         - 오늘 밤 사용자가 실행해야 할 단 하나의 명령(Command)을 출력.
