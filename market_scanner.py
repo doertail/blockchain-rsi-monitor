@@ -208,68 +208,72 @@ def analyze_with_gemini(scan_output, market_data):
         auto_invest_qqqm = os.getenv('AUTO_INVEST_QQQM', '20')
         my_persona = os.getenv('MY_PERSONA')
 
+        # 전략 컨텍스트 정의 (업데이트됨: Buffer Logic 추가)
         strategy_context = f"""
         [사용자 페르소나]
-        {my_persona}
-        
-        [투자 전략: The Sniper v2.0 (Trend Filtering)]
-        1. 핵심 로직 (Logic Gate):
-           - 조건 A (Price > MA120): '상승 추세'. RSI 과매도(30)는 강력한 매수 기회(Buy the Dip).
-           - 조건 B (Price < MA120): '하락 추세'. RSI 과매도(30)는 '지하실 입구'일 가능성 높음. 보수적 접근 필수.
+        - CS 전공 창업가. '감'을 혐오하고 '데이터'와 '논리'만 믿음.
+        - 효율 극대화: 잦은 매매(Noise Trading)를 혐오함. 확실한 구간(High Conviction)에서만 격발.
 
-        2. 포트폴리오 상태:
+        [투자 전략: The Sniper v2.1 (Hysteresis Filter)]
+        1. 핵심 로직 (Logic Gate with Buffer):
+           - Strong Bull (Gap > +3%): 상승 추세 확정. RSI 과매도(30)는 강력한 매수 기회.
+           - Neutral / Gray Zone (-3% <= Gap <= +3%): 추세 보류 구간. 섣불리 팔거나 사지 않음. '관망(Hold)'이 원칙.
+           - Bearish (Gap < -3%): 하락 추세 진입. 보수적 대응.
+           - Deep Bearish (Gap < -10%): 폭락 추세. 절대 매수 금지.
+
+        2. 포트폴리오 상태 (자산 현황):
            - CRCL: {portfolio_crcl}
            - TSLA: {portfolio_tsla} + 매일 {auto_invest_tsla}$ 적립
            - BLOK: {portfolio_blok}
            - QQQM: {portfolio_qqqm} + 매일 {auto_invest_qqqm}$ 적립
-           - COIN: {portfolio_coin}$ 보유 (가격 정찰)
-           - TLT: {portfolio_tlt} (안전자산)
+           - COIN: {portfolio_coin}$ 보유
+           - TLT: {portfolio_tlt}
            - 현금: {portfolio_cash}달러
         """
 
-        # 분석 요청 프롬프트 (데이터 구조 반영)
+        # 분석 요청 프롬프트
         prompt = f"""
-        당신은 세계적인 인지도를 가진 금융 전문가입니다.
-        사용자의 자산을 지키는 '냉철한 리스크 관리 알고리즘'처럼 말해주십시오.
-        단순히 RSI가 낮다고 매수를 외치지 말고, **'추세(Trend)'를 먼저 확인하고 판결을 내리십시오.**
+        당신은 사용자의 자산을 방어하는 '냉철한 리스크 관리 알고리즘'입니다.
+        단순한 수치 비교가 아닌, **'추세의 강도'와 '버퍼(Buffer)'를 고려하여 판결을 내리십시오.**
 
         [입력 데이터]
         {market_data}
-        (참고: 'trend_gap'은 현재가가 120일 이평선 대비 몇 % 위치에 있는지를 의미함. 마이너스면 하락 추세.)
+        (참고: 'trend_gap'은 현재가가 120일 이평선 대비 위치(%)임.)
 
         [분석 지침 및 출력 형식]
 
         **1. Tone & Manner:**
-        - 사용자가 하락장에서 섣불리 매수 버튼을 누르려 할 때, 뼈 때리는 팩트로 제압할 것.
-        - 형식적 인사 생략. 바로 본론 진입.
+        - 감정을 배제하고, 개발자스러운 용어(Latency, Buffer, Exception, Overflow)를 사용하여 명료하게 보고할 것.
+        - 0.xx% 단위의 미세한 등락에 일희일비하지 말 것.
 
         **2. Report Structure:**
 
         **[System Status: Market Trend Check]**
-        - 현재 시장이 'Bullish(상승장)'인지 'Bearish(하락장)'인지, 특히 QQQM(지수)과 개별 종목의 괴리를 한 문장으로 진단.
+        - 시장을 'Bullish(상승)', 'Neutral(보합/테스트)', 'Bearish(하락)' 세 가지로 분류하여 진단.
+        - 특히 QQQM(시장 지수)과 개별 섹터 간의 괴리(Decoupling)를 지적할 것.
 
-        **[Portfolio P&L Analysis]** ⚠️ 중요
-        - **반드시** 포트폴리오 상태에 명시된 '평균 매수가'와 현재가를 비교하여 손익률(%)을 계산할 것.
-        - 각 보유 종목별로:
-          * 평균 매수가 vs 현재가 비교
-          * 손익률 (%) 명시
-          * 물린 종목(-손실)은 추가 매수 시 물타기 위험 경고
-          * 수익 중인 종목(+수익)은 익절 타이밍 검토
-        - 예시: "TSLA: 평균 444.15$ → 현재 431.41$ (-2.9% 손실). 추가 매수는 물타기 위험."
+        **[Portfolio P&L Analysis]**
+        - 각 보유 종목의 '평균단가'와 '현재가'를 비교하여 실시간 손익을 진단할 것.
+        - **손실 중인 종목(-)**: 추세가 하락세(Bearish)라면 "물타기(Averaging Down) 절대 금지" 경고.
+        - **수익 중인 종목(+)**: 추세가 꺾이지 않았다면(Gray Zone 포함) "수익 달리기(Let Profits Run)" 지시.
 
-        **[Debugging & Action Plan]**
-        - 각 종목별로 아래 로직을 적용하여 구체적 행동 지시.
-        - **손익 상태를 반드시 고려**하여 판단할 것.
+        **[Debugging & Action Plan] (Logic Gate 적용)**
+        각 종목별로 아래 **수정된 로직**을 엄격히 적용하여 행동 지시:
 
-        * **Case 1: Bullish (Above MA120) + RSI Low** → "시스템 정상. 적극 매수(Aggressive Buy) 승인."
-        * **Case 2: Bearish (Below MA120) + RSI Low** → "경고(Warning). 떨어지는 칼날임. RSI가 30이라도 매수 보류. 반등 시그널(양봉) 대기."
-        * **Case 3: Deep Bearish (Below -10% from MA120)** → "시스템 위험. 지금 들어가면 물림. 관망(Wait)이 최선의 방어."
-        * **Case 4: Ambiguous (RSI 40~60)** → "노이즈 구간. 리소스 낭비하지 말고 대기."
-        * **Case 5: 손실 중(-) + Bearish** → "물타기 금지. 손절 라인 점검 필요."
+        * **Case 1: Strong Bull (Gap > +3%) + RSI Low(≤30)**
+          → "시스템 정상. 적극 매수(Aggressive Buy) 승인."
+        * **Case 2: Gray Zone (-3% ≤ Gap ≤ +3%)**
+          → **"Hold (관망)."** 이 구간은 추세가 붕괴된 것이 아니라 지지선을 테스트하는 구간임. 
+          → 보유자는 함부로 팔지 말고, 미보유자는 함부로 사지 말 것. (BLOK이 여기에 해당하면 절대 매도 신호 주지 말 것)
+        * **Case 3: Confirmed Bearish (Gap < -3%)**
+          → "경고(Warning). 추세 붕괴됨. 리스크 관리 모드 진입."
+          → 수익 중이면 익절 고민, 손실 중이면 추가 매수 금지.
+        * **Case 4: Deep Bearish (Gap < -10%)**
+          → "시스템 위험(Critical). 지하실 진입. 매수 버튼 비활성화."
 
         **[Final Compile]**
-        - 오늘 밤 사용자가 실행해야 할 단 하나의 명령(Command)을 출력.
-        - 예: "QQQM 적립만 수행하고, 코인 관련주는 앱 삭제하고 쳐다보지 마라."
+        - 오늘 밤 사용자가 실행해야 할 단 하나의 행동 지침(Action Item)을 한 문장으로 요약.
+        - 예: "BLOK은 지지선 테스트 중이니 홀딩하고, CRCL 같은 하락 추세 종목은 쳐다보지 마라."
 
         ---
         [전략 컨텍스트]
